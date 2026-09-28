@@ -924,8 +924,10 @@ INT fwupgrade_hal_get_data_from_Xconf() {
         return -1;
     }
     if (strcasecmp (g_firmwareProtocol, "http") == 0){
-	    port_num = 80;
 	    protocol = 1;
+    }
+	else if (strcasecmp (g_firmwareProtocol, "https") == 0){
+        protocol = 3;
     }
     else if (strcasecmp (g_firmwareProtocol, "tftp") == 0) {
 	    port_num = 69;
@@ -1027,11 +1029,11 @@ int check_image_version(const char *g_firmwareVersion,
 		 "cd /tmp && tftp -g -r %s %s 2>/dev/null",
 		 g_firmwareVersion, g_firmwareLocation);
 	}
-	else if (protocol == 1) {
-		fprintf(stderr, "downloading image using curl -fgLo /tmp/%s  http://%s/%s",
+	else if ((protocol == 1) || (protocol == 3)) {
+		fprintf(stderr, "downloading image using curl -fgLo /tmp/%s  %s%s",
                  g_firmwareVersion, g_firmwareLocation,g_firmwareVersion);
 		snprintf(cmd, sizeof(cmd),
-                 "curl -fgLo /tmp/%s  http://%s/%s",
+                 "curl -fgLo /tmp/%s  %s%s",
 		 g_firmwareVersion, g_firmwareLocation,g_firmwareVersion);
 	}
 	ret = run_command(cmd, output, sizeof(output));
@@ -1344,24 +1346,51 @@ int main(int argc, char **argv) {
         fprintf(stderr, "No upgrade or failed to retrieve the data from Xconf server\n");
         return RETURN_ERR;
     } else {
-        snprintf(cmd, sizeof(cmd),
-            "dmcli eRT setv Device.DeviceInfo.X_RDKCENTRAL-COM_FirmwareDownloadProtocol string %s",
-            g_firmwareProtocol);
-        run_command(cmd, NULL, 0);
+        char pHttpUrl[1024] = {'\0'};
+        int downloadUrlLen = 0;
+        int HttpUrlLen = 0;
 
-        snprintf(cmd, sizeof(cmd),
-            "dmcli eRT setv Device.DeviceInfo.X_RDKCENTRAL-COM_FirmwareDownloadURL string \"%s://%s:%d\"",
-            g_firmwareProtocol, g_firmwareLocation, port_num);
-        run_command(cmd, NULL, 0);
+        strncpy(pHttpUrl, "'", 1);
 
-        snprintf(cmd, sizeof(cmd),
-            "dmcli eRT setv Device.DeviceInfo.X_RDKCENTRAL-COM_FirmwareToDownload string %s",
-            g_firmwareFilename);
-        run_command(cmd, NULL, 0);
+        downloadUrlLen = strlen(g_firmwareLocation);
+        HttpUrlLen = strlen(pHttpUrl);
 
-        snprintf(cmd, sizeof(cmd),
-            "dmcli eRT setv Device.DeviceInfo.X_RDKCENTRAL-COM_FirmwareDownloadAndFactoryReset int 1");
-        run_command(cmd, NULL, 0);
+        if ((downloadUrlLen + HttpUrlLen) < 1024)
+        {
+           strncat(pHttpUrl, g_firmwareLocation, downloadUrlLen);
+        }
+
+        strncat(pHttpUrl, "/", 1);
+
+        downloadUrlLen = strlen(g_firmwareFilename);
+        HttpUrlLen = strlen(pHttpUrl);
+
+        if ((downloadUrlLen + HttpUrlLen) < 1024 )
+        {
+           strncat(pHttpUrl, g_firmwareFilename, downloadUrlLen);
+        }
+
+        strncat(pHttpUrl, "'", 1);
+		if(RETURN_OK != fwupgrade_hal_set_download_url(pHttpUrl, g_firmwareFilename))
+        {
+           fprintf(stderr,"failed to set the download URL\n");
+           return RETURN_ERR;
+
+        }
+        if(RETURN_OK != fwupgrade_hal_download())
+        {
+           fprintf(stderr,"failed download the image to CPE_hal download faild\n");
+           return RETURN_ERR;
+        }
+
+        system("syscfg set X_RDKCENTRAL-COM_LastRebootReason Forced_Software_upgrade");
+        system("syscfg commit");
+
+        if(RETURN_OK != fwupgrade_hal_download_reboot_now())
+        {
+           fprintf(stderr,"failed download_Reboot the CPE_reboot_now is failed\n");
+           return RETURN_ERR;
+        }
 
         printf("[INFO] Firmware upgrade is in progress.....\n");
     }
